@@ -481,6 +481,8 @@ public class ProGuardMojo extends AbstractMojo {
 			inJarFile = baseFile;
 		}
 
+		boolean outJarArchive = isArchive(outJarFile);
+
 		ArrayList<String> args = new ArrayList<String>();
 		ArrayList<File> libraryJars = new ArrayList<File>();
 
@@ -528,25 +530,31 @@ public class ProGuardMojo extends AbstractMojo {
 
 			for (Entry<Artifact, Inclusion> entry : injars.entrySet()) {
 				log.info("--- ADD injars:" + entry.getKey().getArtifactId());
-				File file = getClasspathElement(entry.getKey(), mavenProject);
+				File file = getClasspathElement(entry.getKey(), mavenProject, !outJarArchive);
 				inPath.add(file.toString());
 				StringBuilder filter = new StringBuilder(fileToString(file));
-				filter.append("(!META-INF/MANIFEST.MF");
+				int start = filter.length();
+				if (outJarArchive) {
+					filter.append("(!META-INF/MANIFEST.MF");
+				}
 				if (!addMavenDescriptor) {
-					filter.append(",");
+					filter.append(filter.length() > start ? "," : "(");
 					filter.append("!META-INF/maven/**");
 				}
 				if (entry.getValue().filter != null) {
-					filter.append(",").append(entry.getValue().filter);
+					filter.append(filter.length() > start ? "," : "(");
+					filter.append(entry.getValue().filter);
 				}
-				filter.append(")");
+				if (filter.length() > start) {
+					filter.append(")");
+				}
 				args.add("-injars");
 				args.add(filter.toString());
 			}
 
 			for (Entry<Artifact, Inclusion> entry : libraryjars.entrySet()) {
 				log.info("--- ADD libraryjars:" + entry.getKey().getArtifactId());
-				File file = getClasspathElement(entry.getKey(), mavenProject);
+				File file = getClasspathElement(entry.getKey(), mavenProject, false);
 				hasInclusionLibrary = true;
 				inPath.add(file.toString());
 				if (putLibraryJarsInTempDir) {
@@ -590,7 +598,7 @@ public class ProGuardMojo extends AbstractMojo {
 				if (isExclusion(artifact)) {
 					continue;
 				}
-				File file = getClasspathElement(artifact, mavenProject);
+				File file = getClasspathElement(artifact, mavenProject, includeDependencyInjar && !outJarArchive);
 
 				if (inPath.contains(file.toString())) {
 					log.debug("--- ignore library since one in injar:" + artifact.getArtifactId());
@@ -766,7 +774,7 @@ public class ProGuardMojo extends AbstractMojo {
 				jarArchiver.addArchivedFileSet(baseFile);
 				for (Entry<Artifact, Inclusion> entry : libraryjars.entrySet()) {
 					File file;
-					file = getClasspathElement(entry.getKey(), mavenProject);
+					file = getClasspathElement(entry.getKey(), mavenProject, false);
 					if (file.isDirectory()) {
 						getLog().info("merge project: " + entry.getKey() + " " + file);
 						jarArchiver.addDirectory(file);
@@ -1062,6 +1070,25 @@ public class ProGuardMojo extends AbstractMojo {
 		}
 	}
 
+	private boolean isArchive(File path) {
+		String name = path.getName();
+		int separator = name.lastIndexOf('.');
+		if (separator > 0) {
+			// https://www.guardsquare.com/en/products/proguard/manual/usage#classpath
+			String extension = name.substring(separator + 1).toLowerCase();
+			if (extension.equals("apk")
+					|| extension.equals("jar")
+					|| extension.equals("aar")
+					|| extension.equals("war")
+					|| extension.equals("ear")
+					|| extension.equals("jmod")
+					|| extension.equals("zip")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private Set<Artifact> getDependencies(final Inclusion inc, MavenProject mavenProject)
 			throws MojoExecutionException {
 		@SuppressWarnings("unchecked")
@@ -1090,8 +1117,8 @@ public class ProGuardMojo extends AbstractMojo {
 		return false;
 	}
 
-	private File getClasspathElement(Artifact artifact, MavenProject mavenProject) throws MojoExecutionException {
-		if (artifact.getClassifier() != null) {
+	private File getClasspathElement(Artifact artifact, MavenProject mavenProject, boolean preferFile) throws MojoExecutionException {
+		if (artifact.getClassifier() != null || (preferFile && artifact.getFile().exists())) {
 			return artifact.getFile();
 		}
 		String refId = artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion();
